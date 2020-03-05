@@ -14,6 +14,7 @@ import (
 	"context"
 	"fmt"
 	"time"
+	//"strings"
 
 	pravegav1alpha1 "github.com/pravega/pravega-operator/pkg/apis/pravega/v1alpha1"
 	"github.com/pravega/pravega-operator/pkg/controller/pravega"
@@ -111,7 +112,8 @@ func (r *ReconcilePravegaCluster) Reconcile(request reconcile.Request) (reconcil
 		}
 		return reconcile.Result{Requeue: true}, nil
 	}
-
+ log.Printf("prabhu where it all starts see value of ver = %s "+ pravegaCluster.Spec.Version)
+ log.Printf("prabhu where it all starts see value of ver =")
 	err = r.run(pravegaCluster)
 	if err != nil {
 		log.Printf("failed to reconcile pravega cluster (%s): %v", pravegaCluster.Name, err)
@@ -169,13 +171,17 @@ func (r *ReconcilePravegaCluster) deployCluster(p *pravegav1alpha1.PravegaCluste
 		log.Printf("failed to deploy controller: %v", err)
 		return err
 	}
+  log.Printf("prabhu came till line 173 " +  p.Status.TargetVersion + " spec = "+ p.Spec.Version)
 
+
+ if ((util.IsVersionBelow07(p.Spec.Version)==false && util.IsVersionBelow07(p.Status.CurrentVersion)==true)==false) { //|| (tarVer == "0.7" && curVer != "0.6" )){
+ log.Printf("krishna problem point for deploy ss ")
 	err = r.deploySegmentStore(p)
 	if err != nil {
 		log.Printf("failed to deploy segment store: %v", err)
 		return err
 	}
-
+}
 	return nil
 }
 
@@ -214,13 +220,14 @@ func (r *ReconcilePravegaCluster) deployController(p *pravegav1alpha1.PravegaClu
 
 func (r *ReconcilePravegaCluster) deploySegmentStore(p *pravegav1alpha1.PravegaCluster) (err error) {
 
+ log.Printf("prabhu before headless")
 	headlessService := pravega.MakeSegmentStoreHeadlessService(p)
 	controllerutil.SetControllerReference(p, headlessService, r.scheme)
 	err = r.client.Create(context.TODO(), headlessService)
 	if err != nil && !errors.IsAlreadyExists(err) {
 		return err
 	}
-
+  log.Printf("prabhu before ExternalAcess")
 	if p.Spec.ExternalAccess.Enabled {
 		services := pravega.MakeSegmentStoreExternalServices(p)
 		for _, service := range services {
@@ -245,13 +252,17 @@ func (r *ReconcilePravegaCluster) deploySegmentStore(p *pravegav1alpha1.PravegaC
 	if err != nil && !errors.IsAlreadyExists(err) {
 		return err
 	}
-
 	statefulSet := pravega.MakeSegmentStoreStatefulSet(p)
 	controllerutil.SetControllerReference(p, statefulSet, r.scheme)
+	if statefulSet.Spec.VolumeClaimTemplates != nil{
 	for i := range statefulSet.Spec.VolumeClaimTemplates {
 		controllerutil.SetControllerReference(p, &statefulSet.Spec.VolumeClaimTemplates[i], r.scheme)
 	}
+}
+  log.Printf("prabhu came till client create finally")
+  log.Printf("creating statefulset with name = %s",util.StatefulSetNameForSegmentstore(p))
 	err = r.client.Create(context.TODO(), statefulSet)
+
 	if err != nil && !errors.IsAlreadyExists(err) {
 		return err
 	}
@@ -301,11 +312,29 @@ func (r *ReconcilePravegaCluster) syncClusterSize(p *pravegav1alpha1.PravegaClus
 		return err
 	}
 
+/*	tarVer := ""
+	curVer := ""
+	if len(p.Status.TargetVersion) != 0 {
+		tarVer = strings.Trim(p.Status.TargetVersion, "\t \n")[0:3]
+	}
+	if len(p.Status.CurrentVersion) != 0 {
+		curVer = strings.Trim(p.Status.CurrentVersion, "\t \n")[0:3]
+	}*/
+
+/*
+ speVer := ""
+if len(p.Spec.Version) != 0 {
+	speVer = strings.Trim(p.Spec.Version, "\t \n")[0:3]
+}
+*/
+
+  if ( (util.IsVersionBelow07(p.Spec.Version)==false && util.IsVersionBelow07(p.Status.CurrentVersion)==true)==false) { //(tarVer == "0.7" && curVer != "0.6" )  ){
+	 log.Printf("Corona problem point inside sync ss")
 	err = r.syncSegmentStoreSize(p)
 	if err != nil {
 		return err
 	}
-
+}
 	err = r.syncControllerSize(p)
 	if err != nil {
 		return err
@@ -339,7 +368,7 @@ func (r *ReconcilePravegaCluster) syncBookieSize(p *pravegav1alpha1.PravegaClust
 
 func (r *ReconcilePravegaCluster) syncSegmentStoreSize(p *pravegav1alpha1.PravegaCluster) (err error) {
 	sts := &appsv1.StatefulSet{}
-	name := util.StatefulSetNameForSegmentstore(p.Name)
+	name := util.StatefulSetNameForSegmentstore(p)
 	err = r.client.Get(context.TODO(), types.NamespacedName{Name: name, Namespace: p.Namespace}, sts)
 	if err != nil {
 		return fmt.Errorf("failed to get stateful-set (%s): %v", sts.Name, err)
@@ -351,6 +380,7 @@ func (r *ReconcilePravegaCluster) syncSegmentStoreSize(p *pravegav1alpha1.Praveg
 			scaleDown = *sts.Spec.Replicas - p.Spec.Pravega.SegmentStoreReplicas
 		}
 		sts.Spec.Replicas = &(p.Spec.Pravega.SegmentStoreReplicas)
+		log.Printf("prabhu inside of sysnSize = ")
 		err = r.client.Update(context.TODO(), sts)
 		if err != nil {
 			return fmt.Errorf("failed to update size of stateful-set (%s): %v", sts.Name, err)

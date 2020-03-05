@@ -16,6 +16,7 @@ import (
 
 	api "github.com/pravega/pravega-operator/pkg/apis/pravega/v1alpha1"
 	"github.com/pravega/pravega-operator/pkg/util"
+	log "github.com/sirupsen/logrus"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	policyv1beta1 "k8s.io/api/policy/v1beta1"
@@ -29,13 +30,13 @@ const (
 )
 
 func MakeSegmentStoreStatefulSet(pravegaCluster *api.PravegaCluster) *appsv1.StatefulSet {
-	return &appsv1.StatefulSet{
+	statefulSet := &appsv1.StatefulSet{
 		TypeMeta: metav1.TypeMeta{
 			Kind:       "StatefulSet",
 			APIVersion: "apps/v1",
 		},
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      util.StatefulSetNameForSegmentstore(pravegaCluster.Name),
+			Name:      util.StatefulSetNameForSegmentstore(pravegaCluster),
 			Namespace: pravegaCluster.Namespace,
 			Labels:    util.LabelsForSegmentStore(pravegaCluster),
 		},
@@ -50,9 +51,13 @@ func MakeSegmentStoreStatefulSet(pravegaCluster *api.PravegaCluster) *appsv1.Sta
 			Selector: &metav1.LabelSelector{
 				MatchLabels: util.LabelsForSegmentStore(pravegaCluster),
 			},
-			VolumeClaimTemplates: makeCacheVolumeClaimTemplate(pravegaCluster.Spec.Pravega),
 		},
 	}
+	if util.IsVersionBelow07(pravegaCluster.Spec.Version) {
+		log.Printf("creating volume claim ")
+		statefulSet.Spec.VolumeClaimTemplates = makeCacheVolumeClaimTemplate(pravegaCluster.Spec.Pravega)
+	}
+	return statefulSet
 }
 
 func MakeSegmentStorePodTemplate(p *api.PravegaCluster) corev1.PodTemplateSpec {
@@ -93,19 +98,10 @@ func makeSegmentstorePodSpec(p *api.PravegaCluster) corev1.PodSpec {
 						ContainerPort: 12345,
 					},
 				},
-				EnvFrom: environment,
-				Env:     util.DownwardAPIEnv(),
-				VolumeMounts: []corev1.VolumeMount{
-					{
-						Name:      cacheVolumeName,
-						MountPath: cacheVolumeMountPoint,
-					},
-					{
-						Name:      heapDumpName,
-						MountPath: heapDumpDir,
-					},
-				},
-				Resources: *p.Spec.Pravega.SegmentStoreResources,
+				EnvFrom:      environment,
+				Env:          util.DownwardAPIEnv(),
+				VolumeMounts: MakeSegmentStoreVolumeMount(p),
+				Resources:    *p.Spec.Pravega.SegmentStoreResources,
 				ReadinessProbe: &corev1.Probe{
 					Handler: corev1.Handler{
 						Exec: &corev1.ExecAction{
@@ -158,6 +154,22 @@ func makeSegmentstorePodSpec(p *api.PravegaCluster) corev1.PodSpec {
 	return podSpec
 }
 
+func MakeSegmentStoreVolumeMount(p *api.PravegaCluster) []corev1.VolumeMount {
+	log.Printf("prabhu value outside of volume mount = " + p.Spec.Version)
+	if util.IsVersionBelow07(p.Spec.Version) {
+		return []corev1.VolumeMount{
+			{
+				Name:      cacheVolumeName,
+				MountPath: cacheVolumeMountPoint,
+			},
+			{
+				Name:      heapDumpName,
+				MountPath: heapDumpDir,
+			},
+		}
+	}
+	return nil
+}
 func MakeSegmentstoreConfigMap(p *api.PravegaCluster) *corev1.ConfigMap {
 	javaOpts := []string{
 		"-Dpravegaservice.clusterName=" + p.Name,
@@ -423,7 +435,7 @@ func MakeSegmentStoreExternalServices(pravegaCluster *api.PravegaCluster) []*cor
 				},
 				ExternalTrafficPolicy: corev1.ServiceExternalTrafficPolicyTypeLocal,
 				Selector: map[string]string{
-					appsv1.StatefulSetPodNameLabel: fmt.Sprintf("%s-%d", util.StatefulSetNameForSegmentstore(pravegaCluster.Name), i),
+					appsv1.StatefulSetPodNameLabel: fmt.Sprintf("%s-%d", util.StatefulSetNameForSegmentstore(pravegaCluster), i),
 				},
 			},
 		}

@@ -18,6 +18,7 @@ import (
 
 	v "github.com/hashicorp/go-version"
 	"github.com/pravega/pravega-operator/pkg/apis/pravega/v1alpha1"
+	api "github.com/pravega/pravega-operator/pkg/apis/pravega/v1alpha1"
 	"k8s.io/api/core/v1"
 )
 
@@ -81,8 +82,53 @@ func ConfigMapNameForSegmentstore(clusterName string) string {
 	return fmt.Sprintf("%s-pravega-segmentstore", clusterName)
 }
 
-func StatefulSetNameForSegmentstore(clusterName string) string {
-	return fmt.Sprintf("%s-pravega-segmentstore", clusterName)
+func IsVersionBelow07(ver string) bool {
+	first3 := strings.Trim(ver, "\t \n")[0:3]
+	if first3 == "0.6" || first3 == "0.5" || first3 == "0.4" || first3 == "0.3" || first3 == "0.2" || first3 == "0.1" {
+		return true
+	}
+	return false
+}
+
+/*
+func IsVersionBelow07(p *api.PravegaCluster) bool {
+	//0.7.0-2462.40b38f4
+	if len(p.Status.CurrentVersion) == 0 && len(p.Spec.Version) == 0 {
+		log.Printf("dekho value of ver = " + " is nothing")
+		return false
+	}
+	tarFirst3 := ""
+	first3 := ""
+	if len(p.Status.CurrentVersion) != 0 {
+		first3 = strings.Trim(p.Status.CurrentVersion, "\t \n")[0:3]
+	}
+	if len(p.Spec.Version) != 0 {
+		first3 = strings.Trim(p.Spec.Version, "\t \n")[0:3]
+	}
+	log.Printf("dekho value of ver = " + first3)
+	log.Printf("finaldekho value of p.Status.CurrentVersion == " + p.Status.CurrentVersion)
+	log.Printf("finaldekho value of p.Spec.Version = " + p.Spec.Version)
+	if tarFirst3 == "0.7" {
+		return false
+	}
+	if first3 == "0.6" || first3 == "0.5" || first3 == "0.4" || first3 == "0.3" || first3 == "0.2" || first3 == "0.1" {
+		if len(p.Status.TargetVersion) != 0 {
+			tarFirst3 = strings.Trim(p.Status.TargetVersion, "\t \n")[0:3]
+			log.Printf("value of target = " + tarFirst3)
+			if tarFirst3 == "0.7" {
+				return false
+			}
+		}
+		return true
+	}
+	return false
+}
+*/
+func StatefulSetNameForSegmentstore(p *api.PravegaCluster) string {
+	if IsVersionBelow07(p.Spec.Version) == true {
+		return fmt.Sprintf("%s-pravega-segmentstore", p.Name)
+	}
+	return fmt.Sprintf("%s-latest-pravega-segmentstore", p.Name)
 }
 
 func LabelsForBookie(pravegaCluster *v1alpha1.PravegaCluster) map[string]string {
@@ -157,6 +203,14 @@ func RemoveString(slice []string, str string) (result []string) {
 		result = append(result, item)
 	}
 	return result
+}
+
+//check if version is greater than a given version or not
+func CheckVer(curver string, checkver string, op string) bool {
+	if match, _ := CompareVersions(curver, checkver, op); match {
+		return true
+	}
+	return false
 }
 
 func GetClusterExpectedSize(p *v1alpha1.PravegaCluster) (size int) {

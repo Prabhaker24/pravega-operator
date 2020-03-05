@@ -58,7 +58,6 @@ var _ admission.Handler = &pravegaWebhookHandler{}
 func (pwh *pravegaWebhookHandler) Handle(ctx context.Context, req admissiontypes.Request) admissiontypes.Response {
 	log.Printf("Webhook is handling incoming requests")
 	pravega := &pravegav1alpha1.PravegaCluster{}
-
 	if err := pwh.decoder.Decode(req, pravega); err != nil {
 		return admission.ErrorResponse(http.StatusBadRequest, err)
 	}

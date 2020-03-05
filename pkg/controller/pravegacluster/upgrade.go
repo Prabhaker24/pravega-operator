@@ -62,7 +62,7 @@ func (r *ReconcilePravegaCluster) syncClusterVersion(p *pravegav1alpha1.PravegaC
 			return r.clearUpgradeStatus(p)
 		}
 
-		if p.Status.TargetVersion == p.Status.CurrentVersion {
+		if p.Status.TargetVersion == p.Status.CurrentVersion && (p.Status.ReadyReplicas == p.Status.Replicas) {
 			log.Printf("syncing to version '%s' completed", p.Status.TargetVersion)
 			return r.clearUpgradeStatus(p)
 		}
@@ -153,7 +153,6 @@ func (r *ReconcilePravegaCluster) rollbackClusterVersion(p *pravegav1alpha1.Prav
 		}
 		return nil
 	}
-
 	syncCompleted, err := r.syncComponentsVersion(p)
 	if err != nil {
 		// Error rolling back, set appropriate status and ask for manual intervention
@@ -207,7 +206,7 @@ func (r *ReconcilePravegaCluster) syncComponentsVersion(p *pravegav1alpha1.Prave
 		},
 		componentSyncVersionFun{
 			name: "segmentstore",
-			fun:  r.syncSegmentStoreVersion,
+			fun:  r.syncStoreVersion,
 		},
 		componentSyncVersionFun{
 			name: "controller",
@@ -238,7 +237,28 @@ func (r *ReconcilePravegaCluster) syncComponentsVersion(p *pravegav1alpha1.Prave
 	return true, nil
 }
 
+func (r *ReconcilePravegaCluster) syncStoreVersion(p *pravegav1alpha1.PravegaCluster) (synced bool, err error) {
+	/*	log.Printf("dekhoinsideupdate targetImage = " + p.Status.TargetVersion)
+		log.Printf("dekhoinsideupdate currentVersion" + p.Status.CurrentVersion)
+		tarVer := ""
+		curVer := ""
+		if len(p.Status.TargetVersion) != 0 {
+			tarVer = strings.Trim(p.Status.TargetVersion, "\t \n")[0:3]
+		}
+		if len(p.Status.CurrentVersion) != 0 {
+			curVer = strings.Trim(p.Status.CurrentVersion, "\t \n")[0:3]
+		}
+		log.Printf("dekhoinsideupdate tarImage = " + tarVer)
+		log.Printf("dekhoinsideupdate curImage = " + curVer)*/
+	if util.IsVersionBelow07(p.Spec.Version) == false && util.IsVersionBelow07(p.Status.CurrentVersion) == true {
+		log.Printf("calling syncSegmentStoreVersion2")
+		return r.syncSegmentStoreVersion2(p)
+	}
+	return r.syncSegmentStoreVersion(p)
+}
+
 func (r *ReconcilePravegaCluster) syncComponent(component componentSyncVersionFun, p *pravegav1alpha1.PravegaCluster) (synced bool, err error) {
+	log.Printf("came inside the synComponent shouldn't come here")
 	isSyncComplete, err := component.fun(p)
 	if err != nil {
 		return false, fmt.Errorf("failed to sync %s version. %s", component.name, err)
@@ -325,15 +345,15 @@ func (r *ReconcilePravegaCluster) syncControllerVersion(p *pravegav1alpha1.Prave
 func (r *ReconcilePravegaCluster) syncSegmentStoreVersion(p *pravegav1alpha1.PravegaCluster) (synced bool, err error) {
 
 	sts := &appsv1.StatefulSet{}
-	name := util.StatefulSetNameForSegmentstore(p.Name)
-	err = r.client.Get(context.TODO(), types.NamespacedName{Name: name, Namespace: p.Namespace}, sts)
-	if err != nil {
-		return false, fmt.Errorf("failed to get statefulset (%s): %v", sts.Name, err)
-	}
+	name := util.StatefulSetNameForSegmentstore(p)
 
 	targetImage, err := util.PravegaTargetImage(p)
 	if err != nil {
 		return false, err
+	}
+	err = r.client.Get(context.TODO(), types.NamespacedName{Name: name, Namespace: p.Namespace}, sts)
+	if err != nil {
+		return false, fmt.Errorf("failed to get statefulset (%s): %v", sts.Name, err)
 	}
 
 	if sts.Spec.Template.Spec.Containers[0].Image != targetImage {
@@ -405,6 +425,148 @@ func (r *ReconcilePravegaCluster) syncSegmentStoreVersion(p *pravegav1alpha1.Pra
 	}
 
 	// Wait until next reconcile iteration
+	return false, nil
+}
+
+func (r *ReconcilePravegaCluster) syncSegmentStoreVersion2(p *pravegav1alpha1.PravegaCluster) (synced bool, err error) {
+	sts := &appsv1.StatefulSet{}
+	name := p.Name + "-pravega-segmentstore"
+	err = r.client.Get(context.TODO(), types.NamespacedName{Name: name, Namespace: p.Namespace}, sts)
+	if err != nil {
+		log.Printf("ye hai specific value of error = " + err.Error())
+		return false, err
+	}
+	//*sts.Spec.Replicas = 0
+	/*l := len(p.Status.VersionHistory)
+	if l <= 1 {
+		l = 1
+	}
+	log.Printf("ye dekho value of history = " + p.Status.VersionHistory[l-2])
+	pods, err := r.getStsPodsWithVersion(sts, p.Status.VersionHistory[l-2])
+	if err != nil {
+		return false, fmt.Errorf("failed to get statefulset (%s): %v", sts.Name, err)
+	}
+	if err != nil {
+		return false, fmt.Errorf("failed to get statefulset (%s): %v", sts.Name, err)
+	}*/
+	log.Printf("ye deko old sts name = " + sts.Name)
+
+	statefulSet := pravega.MakeSegmentStoreStatefulSet(p)
+	controllerutil.SetControllerReference(p, statefulSet, r.scheme)
+	log.Printf("ye dekhoinsideupdate new sts name = " + statefulSet.Name)
+
+	oldSSReplicas := *sts.Spec.Replicas
+	//oldSSRedyReplicas := sts.Status.ReadyReplicas
+	newSSReplicas := *statefulSet.Spec.Replicas
+	//	newSSReadyReplicas := sts.Status.ReadyReplicas
+	if oldSSReplicas == p.Spec.Pravega.SegmentStoreReplicas {
+		log.Printf("first bharti value of old updated replicas = " + fmt.Sprint(sts.Status.UpdatedReplicas))
+		newSSReplicas = 2
+		*statefulSet.Spec.Replicas = 2
+		err = r.client.Create(context.TODO(), statefulSet)
+		if err != nil {
+			log.Printf("yaha hua problem  inside update for newSSR create wala= " + err.Error())
+		}
+		*sts.Spec.Replicas = *sts.Spec.Replicas - 2
+		err = r.client.Update(context.TODO(), sts)
+		if err != nil {
+			log.Printf("yaha hua problem  inside update for oldSSR create wala= " + err.Error())
+		}
+	}
+	log.Printf("bharti imp value of newSSReplicas = " + fmt.Sprint(newSSReplicas))
+	log.Printf("bharti value of oldssReplicas = " + fmt.Sprint(oldSSReplicas))
+	log.Printf("bharti value  of pravega spec replica = " + fmt.Sprint(p.Spec.Pravega.SegmentStoreReplicas))
+	log.Printf("bharti value of old redy replicas = " + fmt.Sprint(sts.Status.ReadyReplicas))
+	log.Printf("bharti value of new ready replicas = " + fmt.Sprint(statefulSet.Status.ReadyReplicas))
+	log.Printf("bharti value of old updated replicas = " + fmt.Sprint(sts.Status.UpdatedReplicas))
+	log.Printf("bharti value of new updated replicas = " + fmt.Sprint(statefulSet.Status.UpdatedReplicas))
+
+	/*if newSSReplicas <= p.Spec.Pravega.SegmentStoreReplicas-2 {
+		log.Printf("anisha value of newReplicas = " + fmt.Sprint(newSSReplicas))
+		*statefulSet.Spec.Replicas = newSSReplicas + 2
+		err = r.client.Update(context.TODO(), statefulSet)
+		if err != nil {
+			log.Printf("yaha hua problem  inside update for newSSR= " + err.Error())
+		}
+	}
+
+	if newSSReplicas == p.Spec.Pravega.SegmentStoreReplicas-1 {
+		log.Printf("anisha value of newReplicas of 1 if = " + fmt.Sprint(newSSReplicas))
+		*statefulSet.Spec.Replicas = newSSReplicas + 1
+		err = r.client.Update(context.TODO(), statefulSet)
+		if err != nil {
+			log.Printf("yaha hua problem  inside update for newSSR +1 condition= " + err.Error())
+		}
+	}*/
+
+	if *sts.Spec.Replicas > 1 {
+		log.Printf("anisha value of newReplicas = " + fmt.Sprint(newSSReplicas))
+		*statefulSet.Spec.Replicas = newSSReplicas + 2
+		err = r.client.Update(context.TODO(), statefulSet)
+		if err != nil {
+			log.Printf("yaha hua problem  inside update for newSSR= " + err.Error())
+		}
+		log.Printf("anisha value of oldReplicas = " + fmt.Sprint(oldSSReplicas))
+		*sts.Spec.Replicas = *sts.Spec.Replicas - 2
+		err = r.client.Update(context.TODO(), sts)
+		if err != nil {
+			log.Printf("yaha hua problem  inside update for oldSSR= " + err.Error())
+		}
+		err = r.syncStatefulSetPvc(sts)
+		if err != nil {
+			log.Printf("prajakta shouldn't be here = "+ err.Error())
+			return false,nil
+		}
+
+	}
+
+	if *sts.Spec.Replicas == 1 {
+		log.Printf("anisha value of newReplicas of 1 if = " + fmt.Sprint(newSSReplicas))
+		*statefulSet.Spec.Replicas = newSSReplicas + 1
+		err = r.client.Update(context.TODO(), statefulSet)
+		if err != nil {
+			log.Printf("yaha hua problem  inside update for newSSR +1 condition= " + err.Error())
+		}
+		*sts.Spec.Replicas = 0
+		err = r.client.Update(context.TODO(), sts)
+		if err != nil {
+			log.Printf("yaha hua problem  inside update for oldSSR last if= " + err.Error())
+		}
+		err = r.syncStatefulSetPvc(sts)
+		if err != nil {
+			log.Printf("prajakta shouldn't be here = "+ err.Error())
+			return false,nil
+		}
+	}
+
+	/*	if err != nil {
+			log.Printf("ye dekhoinsideupdate new sts nahi ban paya")
+			return true, nil
+		}
+
+		log.Printf("ye dekhoinsideupdate old stsName fore setting replicas to 0  = " + sts.Name)
+		err = r.client.Update(context.TODO(), sts)
+		if err != nil {
+			return false, err
+		}
+	*/
+
+	/*pods, err := r.getStsPodsWithVersion(sts, p.Status.CurrentVersion)
+	for _, podItem := range pods {
+	if err != nil {
+		log.Printf("yemerepodsdekho = " + podItem.Name)
+		err = r.client.Delete(context.TODO(), podItem)
+			return false, err
+		}
+	}*/
+	if *sts.Spec.Replicas == 0 {
+		return true, nil
+	}
+	/*
+		err = checkSyncTimeout(p, pravegav1alpha1.UpdatingSegmentstoreReason, sts.Status.UpdatedReplicas)
+		if err != nil {
+			return false, fmt.Errorf("updating statefulset (%s) failed due to %v", sts.Name, err)
+		}*/
 	return false, nil
 }
 

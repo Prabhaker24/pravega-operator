@@ -1,10 +1,11 @@
 # Default values for pravega-operator.
 # This is a YAML-formatted file.
 # Declare variables to be passed into your templates.
-
+#prabhu75/pravega_operator:for312_1
+# best version for312_46
 image:
-  repository: pravega/pravega-operator
-  tag: 0.4.0
+  repository: prabhu75/pravega_operator
+  tag: for312_62
   pullPolicy: IfNotPresent
 
 ## Install RBAC roles and bindings
